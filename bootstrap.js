@@ -45,10 +45,10 @@ async function loadSecretsToEnv({
 }
 
 (async () => {
-  if (process.env.USE_SECRETS_MANAGER) {
+  if (process.env.USE_SECRETS_MANAGER === 'true') {
     await loadSecretsToEnv({
       prefix: '',
-      optional: process.env.NODE_ENV !== 'production',
+      optional: false,
       region: process.env.AWS_REGION || 'eu-central-1',
       secretId: process.env.SECRETS_MANAGER_ID || 'myapp/staging',
     });
