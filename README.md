@@ -1,934 +1,1146 @@
-# Assessment Codebase Guide
+# Node.js Backend Project - Architecture Guide
 
-This guide will help you understand the codebase architecture and set up your services, endpoints, and middleware correctly. This is NOT a solution to the assessment - it's a reference guide to help you implement your own solution following the codebase conventions.
-
-> 📖 **For comprehensive architecture documentation, see [documentation.md](./documentation.md)**
-
----
+A Node.js backend application following clean architecture principles, functional programming paradigms, and best practices.
 
 ## Table of Contents
 
-1. [Project Architecture Overview](#project-architecture-overview)
-2. [Setting Up a Service](#setting-up-a-service)
-3. [Creating an Endpoint](#creating-an-endpoint)
-4. [Using Middleware (Optional)](#using-middleware-optional)
-5. [Error Handling](#error-handling)
-6. [Testing Your Implementation](#testing-your-implementation)
-7. [Common Pitfalls](#common-pitfalls)
+- [Architecture Overview](#architecture-overview)
+- [Programming Conventions](#programming-conventions)
+- [Core Modules (`@app-core`)](#core-modules-app-core)
+- [Services (`@app/services`)](#services-appservices)
+- [Data Layer (`@app/repository`)](#data-layer-apprepository)
+- [Endpoints](#endpoints)
+- [Middlewares](#middlewares)
+- [Specs Folder](#specs-folder)
+- [Error Handling](#error-handling)
+- [Messages](#messages)
+- [Logging](#logging)
+- [Code Quality Rules](#code-quality-rules)
+- [Best Practices](#best-practices)
 
 ---
 
-## Project Architecture Overview
+## Architecture Overview
 
-The codebase follows a layered architecture:
+### Data Flow
 
 ```
-Request → Endpoint → Middleware (optional) → Service → Repository → Database
+Client Request → Express Server → Middleware (Optional) → Endpoint Handler → Service → Repository → Database
 ```
 
-**Key Principles:**
-- **Endpoints** handle HTTP routing and orchestrate service calls
-- **Services** contain business logic and validation
-- **Repositories** handle database operations (not needed for assessment)
-- **Middleware** handles cross-cutting concerns (auth, logging, etc.)
+### Key Principles
 
-**Path Aliases:**
-- `@app-core/*` - Core utilities (logger, validator, errors, etc.)
-- `@app/services/*` - Business logic services
-- `@app/messages/*` - Error message definitions
-- `@app/middlewares/*` - Middleware functions
-
-> 💡 **For detailed information about core modules, repositories, and advanced patterns, see [documentation.md](./documentation.md)**
+1. **Separation of Concerns**: Endpoints orchestrate, services process, repositories handle data
+2. **Single Responsibility**: Each file exports one function with a clear purpose
+3. **Repository Pattern**: All database access goes through repositories
+4. **Functional Programming**: Pure functions, single exit points, immutability where possible
+5. **Type Safety via Validation**: Runtime validation using VSL specs
 
 ---
 
-## Setting Up a Service
+## Programming Conventions
 
-Services are the "workhorse" of the application. They contain all business logic and validation.
+### File Naming
 
-### Service Structure
+- **Verb-based names** for files that export functions (e.g., `create-user.js`, `validate-token.js`)
+- **Noun-based names** for configuration/data files (e.g., `user.js` for models)
+- **kebab-case** for all filenames
+- Export name should match filename (e.g., `create-user.js` exports `createUser`)
 
-**Location:** `services/[feature-group]/[service-name].js`
+### Code Conventions
 
-**Example:** `services/payment-processor/parse-instruction.js`
+- **camelCase** for functions and variables
+- **PascalCase** for model exports and classes
+- **snake_case** for request/response payloads and database fields
+- **SCREAMING_SNAKE_CASE** for constants
 
-### Service Template
+### Path Aliases
+
+- `@app-core/*` - Core utilities and libraries
+- `@app/*` - Application code (services, repositories, messages, middlewares)
+
+---
+
+## Core Modules (`@app-core`)
+
+The `core` folder contains reusable utilities and abstractions. **Never modify core modules without team discussion.**
+
+### 🪵 Logging
+
+Use `appLogger` for all logging. **Never use `console.log`**.
+
+```javascript
+const { appLogger } = require('@app-core/logger');
+
+// Usage
+appLogger.info({ data }, 'log-key');
+appLogger.warn({ data }, 'log-key');
+appLogger.error({ data }, 'log-key');
+appLogger.errorX({ data }, 'critical-error-key'); // For critical errors with special formatting
+```
+
+**Time Logging** for performance measurement:
+
+```javascript
+const { TimeLogger } = require('@app-core/logger');
+
+const timeLogger = new TimeLogger('service-name');
+timeLogger.start('operation-name');
+// ... code to measure
+timeLogger.end('operation-name'); // Logs duration automatically
+```
+
+### 🔐 Security
+
+Hash and validate sensitive data:
+
+```javascript
+const { hash } = require('@app-core/security');
+
+// Supported: 'md5', 'sha1', 'sha256', 'sha512', 'bcrypt'
+const hashedPassword = await hash.create('myPassword123', 'bcrypt');
+const isValid = await hash.validate('myPassword123', hashedPassword, 'bcrypt'); // true
+```
+
+### 🎲 Randomness & UUIDs
+
+```javascript
+const { randomBytes, randomNumbers, ulid, uuid } = require('@app-core/randomness');
+
+const id = ulid(); // ULID string (26 chars) - use for all record IDs
+const randomHex = randomBytes(12); // "a1b2c3d4e5f6"
+const randomNum = randomNumbers(1, 100); // Random number between 1-100
+```
+
+### ⚙️ Handlebars Templating
+
+```javascript
+const { parse, render } = require('@app-core/handlebars');
+
+const template = parse('Hello, {{name}}! Welcome to {{place}}.');
+const result = render(template, { name: 'Alex', place: 'our app' });
+// "Hello, Alex! Welcome to our app."
+```
+
+### 🌐 HTTP Requests
+
+```javascript
+const HttpRequest = require('@app-core/http-request');
+
+// Direct usage
+const data = await HttpRequest.get('https://api.example.com/data');
+
+// With base URL (recommended for services)
+const apiClient = HttpRequest.initialize({
+  baseUrl: 'https://api.example.com',
+});
+const users = await apiClient.get('/users');
+```
+
+### 🚨 Error Handling
+
+**CRITICAL**: All errors must use `throwAppError` with messages from `messages/` files.
+
+```javascript
+const { throwAppError, ERROR_CODE } = require('@app-core/errors');
+const { IdentityManagementMessages } = require('@app/messages');
+
+if (!user) {
+  throwAppError(IdentityManagementMessages.USER_NOT_FOUND, ERROR_CODE.NOTFOUND);
+}
+```
+
+**Available Error Codes**:
+- `AUTHERR` - Authentication error
+- `NOAUTHERR` - No authentication provided
+- `INVLDAUTHTOKEN` - Invalid auth token
+- `INACTIVEACCT` - Inactive account
+- `EXPIREDTOKEN` - Expired token
+- `INVLDREQ` - Invalid request
+- `PERMERR` - Permission error
+- `LIMITERR` - Rate limit error
+- `FEEERR` - Fee calculation error
+- `NOTFOUND` - Resource not found
+- `APPERR` - Application error
+- `HTTPREQERR` - HTTP request error
+- `DUPLRCRD` - Duplicate record
+- `VALIDATIONERR` - Validation error
+- `INVLDDATA` - Invalid data
+
+### ✅ Validator
+
+**VSL Syntax** (Validation Specification Language)
+
+**Structure**: `root { ... }` with space before brace
 
 ```javascript
 const validator = require('@app-core/validator');
-const { throwAppError, ERROR_CODE } = require('@app-core/errors');
-const { appLogger } = require('@app-core/logger');
-const PaymentMessages = require('@app/messages/payment'); // Your message file
 
-// Step 1: Define your validation spec
-const spec = `root {
-  accounts[] {
-    id string
-    balance number
-    currency string
-  }
-  instruction string
+const spec = `root { // User registration
+  email string<trim|lowercase|isEmail>
+  password string<minLength:8|maxLength:128>
+  first_name string<trim|minLength:2|maxLength:35>
+  last_name string<trim|minLength:2|maxLength:35>
+  age? number<min:18|max:120>
+  status string(active|inactive|pending)
+  roles[] string(admin|user|moderator)
 }`;
 
-// Step 2: Parse the spec once (outside the function)
 const parsedSpec = validator.parse(spec);
 
-// Step 3: Define your service function
-async function parseInstruction(serviceData, options = {}) {
-  let response;
-
-  // Step 4: Validate input data
-  const data = validator.validate(serviceData, parsedSpec);
-
-  try {
-    // Step 5: Implement your business logic
-    const instruction = data.instruction.trim();
-    const accounts = data.accounts;
-
-    // Your parsing logic here...
-    // Example: Extract keywords, validate, process
-
-    // Build your response
-    response = {
-      type: 'DEBIT',
-      amount: 100,
-      currency: 'USD',
-      debit_account: 'a',
-      credit_account: 'b',
-      execute_by: null,
-      status: 'successful',
-      status_reason: 'Transaction executed successfully',
-      status_code: 'AP00',
-      accounts: processedAccounts,
-    };
-  } catch (error) {
-    appLogger.errorX(error, 'parse-instruction-error');
-    throw error;
-  }
-
-  // Step 6: Single exit point - return response
-  return response;
+function myService(serviceData) {
+  const data = validator.validate(serviceData, parsedSpec); // Throws on invalid
+  // ... use validated data
 }
-
-// Step 7: Export the function
-module.exports = parseInstruction;
 ```
 
-### Validator Spec Syntax (VSL)
-
-The validator uses a custom DSL (Domain Specific Language) called VSL.
-
-**Basic Syntax:**
-```javascript
-const spec = `root { // Description (optional)
-  fieldName type
-  optionalField? type
-  arrayField[] type
-  nestedObject {
-    innerField type
-  }
-}`;
-```
-
-**Important:** Always include a **space** between `root` and `{`
-
-**Available Types:**
-- `string` - Text values
-- `number` - Numeric values (integers or decimals)
-- `boolean` - true/false values
-- `object` - Nested objects
-- `any` - Any type
-
-**Field Modifiers:**
+**Field Syntax**:
 - `field type` - Required field
 - `field? type` - Optional field
 - `field[] type` - Required array
 - `field[]? type` - Optional array
+- `field { ... }` - Nested object
+- `field[] { ... }` - Array of objects
 
-**Constraints:**
+**Types**: `string`, `number`, `boolean`, `object`, `any`
 
-Constraints are added with angle brackets: `<constraint1|constraint2>`
+**Constraints**:
 
 ```javascript
-// String constraints
-string<trim>                           // Remove leading/trailing spaces
-string<lowercase>                      // Convert to lowercase
-string<uppercase>                      // Convert to uppercase
-string<minLength:8>                    // Minimum length
-string<maxLength:100>                  // Maximum length
-string<length:26>                      // Exact length
-string<lengthBetween:5,50>            // Length range
-string<startsWith:prefix>             // Must start with
-string<endsWith:.pdf>                 // Must end with
-string<isEmail>                       // Email validation
+// Numeric
+min:value, max:value, between:min,max
 
-// Numeric constraints
-number<min:0>                         // Minimum value
-number<max:1000>                      // Maximum value
-number<between:1,100>                 // Value range
+// String Length
+length:value, minLength:value, maxLength:value, lengthBetween:min,max
+
+// String Patterns
+startsWith:prefix, endsWith:suffix
+
+// String Transforms
+trim, lowercase, uppercase
+
+// Format Validation
+isEmail, timestampToHex
+
+// Database Constraints (models only)
+isUnique, indexed
 
 // Enums (preferred shorthand)
 status string(pending|approved|rejected)
-
-// Multiple constraints (order matters: transforms → length → format → enums)
-email string<trim|lowercase|isEmail>
-code string<uppercase|length:3>
+// Alternative: status string<isAnyOf:pending,approved,rejected>
 ```
 
-**Example Specs:**
+**Constraint Order**: transforms → length → format → enums
+
+**Examples**:
 
 ```javascript
-// Simple flat structure
-const spec1 = `root {
-  name string<trim|minLength:1>
-  email string<trim|lowercase|isEmail>
-  age? number<min:18|max:120>
-  status string(active|inactive)
-}`;
+// Basic
+email string<trim|lowercase|isEmail>
+currency string<length:3|uppercase>  // USD, EUR, GBP
+age? number<min:13|max:120>
 
-// Nested structure
-const spec2 = `root {
-  user {
-    id string<length:26>
-    profile {
-      name string<trim>
-      email string<trim|lowercase|isEmail>
-    }
-  }
+// Advanced
+api_key string<startsWith:sk_|length:32>
+filename string<endsWith:.pdf>
+score number<between:0,100>
+description string<trim|lengthBetween:10,500>
+
+// Nested objects
+profile? {
+  name string<trim|minLength:1>
   settings {
-    theme string(light|dark)
+    theme string(light|dark|auto)
     notifications boolean
   }
-}`;
-
-// Arrays
-const spec3 = `root {
-  accounts[] {
-    id string
-    balance number<min:0>
-    currency string<uppercase|length:3>
-  }
-  tags[]? string<trim|minLength:1>
-}`;
-```
-
-### Service Constraints (CRITICAL)
-
-**1. Two Parameters Only:**
-```javascript
-async function myService(serviceData, options = {}) {
-  // serviceData: all input data as a single object
-  // options: optional configuration (defaults to {})
 }
 ```
 
-**2. Input Validation First:**
-```javascript
-const data = validator.validate(serviceData, parsedSpec);
-// Validation must be the FIRST step
-```
-
-**3. Single Exit Point:**
-```javascript
-async function myService(serviceData, options = {}) {
-  let response; // Declare at top
-  
-  // ... logic ...
-  
-  return response; // Only ONE return statement
-}
-```
-
-**4. Error Handling:**
-```javascript
-// Always use throwAppError with message files
-if (invalidCondition) {
-  throwAppError(MessageFile.ERROR_MESSAGE, ERROR_CODE.INVLDDATA);
-}
-```
-
-### Creating Message Files
-
-**Location:** `messages/[resource].js`
-
-**Example:** `messages/payment.js`
+### 💾 Mongoose Helper
 
 ```javascript
-const PaymentMessages = {
-  INVALID_AMOUNT: 'Amount must be a positive integer',
-  CURRENCY_MISMATCH: 'Account currency mismatch',
-  UNSUPPORTED_CURRENCY: 'Only NGN, USD, GBP, and GHS are supported',
-  INSUFFICIENT_FUNDS: 'Insufficient funds in debit account',
-  SAME_ACCOUNT_ERROR: 'Debit and credit accounts cannot be the same',
-  ACCOUNT_NOT_FOUND: 'Account not found',
-  INVALID_ACCOUNT_ID: 'Invalid account ID format',
-  INVALID_DATE_FORMAT: 'Date must be in YYYY-MM-DD format',
-  MISSING_KEYWORD: 'Missing required keyword',
-  INVALID_KEYWORD_ORDER: 'Invalid keyword order',
-  MALFORMED_INSTRUCTION: 'Malformed instruction',
-  TRANSACTION_SUCCESSFUL: 'Transaction executed successfully',
-  TRANSACTION_PENDING: 'Transaction scheduled for future execution',
-};
+const { createSession } = require('@app-core/mongoose');
 
-module.exports = PaymentMessages;
-```
-
-**Register your message file** in `messages/index.js`:
-```javascript
-module.exports = {
-  // ... existing messages
-  PaymentMessages: require('./payment'),
-};
+// For transactions
+const session = await createSession();
+await session.startTransaction();
+// ... database operations
+await session.commitTransaction();
+await session.endSession();
 ```
 
 ---
 
-## Creating an Endpoint
+## Services (`@app/services`)
 
-Endpoints define API routes and orchestrate service calls.
+Services contain all business logic. They are **pure functions** that process data.
+
+### Service Structure
+
+**Location**: `services/[feature-group]/[service-name].js`
+
+**Critical Requirements**:
+
+1. ✅ **Two Parameters Only**: `(serviceData, options = {})`
+2. ✅ **Validation First**: Always validate input before any logic
+3. ✅ **Single Exit Point**: One `return` statement
+4. ✅ **Error Handling**: Use `throwAppError` with messages from `messages/`
+
+### Basic Service Example
+
+```javascript
+const validator = require('@app-core/validator');
+const { hash } = require('@app-core/security');
+const Identity = require('@app/repository/identity-management/identity');
+const { throwAppError, ERROR_CODE } = require('@app-core/errors');
+const { IdentityManagementMessages } = require('@app/messages');
+
+const spec = `root {
+  email string<trim|lowercase|isEmail>
+  password string<minLength:8|maxLength:128>
+  first_name string<trim|minLength:2|maxLength:35>
+  last_name string<trim|minLength:2|maxLength:35>
+}`;
+
+const parsedSpec = validator.parse(spec);
+
+async function createIdentity(serviceData, options = {}) {
+  const data = validator.validate(serviceData, parsedSpec);
+  let result;
+
+  try {
+    // Check for existing user
+    const existingUser = await Identity.findOne({
+      query: { email: data.email },
+    });
+
+    if (existingUser) {
+      throwAppError(
+        IdentityManagementMessages.EMAIL_ALREADY_EXISTS,
+        ERROR_CODE.DUPLRCRD
+      );
+    }
+
+    // Hash password
+    data.password = await hash.create(data.password, 'bcrypt');
+
+    // Create user
+    const user = await Identity.create(data);
+
+    result = {
+      id: user._id,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+    };
+  } catch (error) {
+    appLogger.errorX(error, 'create-identity-error');
+    throw error;
+  }
+
+  return result; // Single exit point
+}
+
+module.exports = createIdentity;
+```
+
+### Transaction Pattern
+
+**When to Use Transactions**:
+- Multi-table operations (user + profile + auth)
+- Financial operations (payment + ledger + balance)
+- Any operation where partial failure creates invalid state
+
+**Pattern**:
+
+```javascript
+const { createSession } = require('@app-core/mongoose');
+const { appLogger } = require('@app-core/logger');
+
+async function serviceWithTransaction(serviceData, options = {}) {
+  const data = validator.validate(serviceData, parsedSpec);
+  let result;
+
+  // Determine session ownership
+  let sessionToUse;
+  let isSessionNative = false;
+
+  if (options.session) {
+    sessionToUse = options.session; // Use passed session
+    isSessionNative = false;
+  } else {
+    sessionToUse = await createSession(); // Create own session
+    isSessionNative = true;
+  }
+
+  try {
+    // Only start transaction if we created the session
+    if (isSessionNative) {
+      sessionToUse.startTransaction();
+    }
+
+    // All database operations use the session
+    const record1 = await Repository1.create(data1, { session: sessionToUse });
+    const record2 = await Repository2.create(data2, { session: sessionToUse });
+
+    // Call other services, passing the session
+    const relatedData = await otherService(otherPayload, { session: sessionToUse });
+
+    // Only commit if we own the session
+    if (isSessionNative) {
+      await sessionToUse.commitTransaction();
+    }
+
+    result = { record1, record2, relatedData };
+  } catch (error) {
+    // Only abort if we own the session
+    if (isSessionNative) {
+      await sessionToUse.abortTransaction();
+    }
+    appLogger.errorX(error, 'service-transaction-error');
+    throw error;
+  } finally {
+    // Only end session if we own it
+    if (isSessionNative) {
+      await sessionToUse.endSession();
+    }
+  }
+
+  return result;
+}
+```
+
+**Transaction Exceptions** (DO NOT use transactions):
+- Authentication services (logs must persist on failure)
+- Audit logging
+- Rate limiting
+- Security monitoring
+- Webhook delivery logs
+
+---
+
+## Data Layer (`@app/repository`)
+
+**Repository Pattern**: All database access goes through repositories.
+
+### Model Definition
+
+**Location**: `models/[model-name].js` (singular form of collection)
+
+```javascript
+const { ModelSchema, SchemaTypes, DatabaseModel } = require('@app-core/mongoose');
+const timestamps = require('./plugins/timestamps');
+
+const modelName = 'identities'; // Plural, camelCase
+
+const schemaConfig = {
+  _id: { type: SchemaTypes.ULID }, // Always use ULID for IDs
+  email: { type: SchemaTypes.String, unique: true, index: true },
+  first_name: { type: SchemaTypes.String },
+  last_name: { type: SchemaTypes.String },
+  status: { type: SchemaTypes.String, index: true },
+  // Never add: required: true (validation is in services)
+  // Never add: enum: [] (validation is in services)
+};
+
+const modelSchema = new ModelSchema(schemaConfig, { collection: modelName });
+modelSchema.plugin(timestamps); // Adds created, updated, deleted
+
+module.exports = DatabaseModel.model(modelName, modelSchema, { paranoid: true });
+```
+
+**Export in `models/index.js`** (PascalCase):
+
+```javascript
+const Identity = require('./identity');
+module.exports = { Identity };
+```
+
+### Model Constraints Rules
+
+**CRITICAL**: Only database-level constraints go in models:
+
+✅ **Allowed in Models**:
+- `unique: true` (from spec's `<isUnique>`)
+- `index: true` (from spec's `<indexed>`)
+- `default: value`
+
+❌ **NOT Allowed in Models**:
+- `required: true` (validate in service)
+- `enum: []` (validate in service)
+- `minLength`, `maxLength` (validate in service)
+
+### Repository Creation
+
+**Location**: `repository/[model-name]/index.js`
+
+```javascript
+const repositoryFactory = require('@app-core/repository-factory');
+
+// Must match model name from models/index.js (PascalCase)
+module.exports = repositoryFactory('Identity', {});
+```
+
+### Repository Methods
+
+```javascript
+const Identity = require('@app/repository/identity-management/identity');
+
+// Find one record
+const user = await Identity.findOne({
+  query: { email: 'user@example.com' },
+  options: { projection: { password: 0 } }, // Optional
+});
+
+// Find many records
+const users = await Identity.findMany({
+  query: { status: 'active' },
+  options: {
+    limit: 20,
+    sort: { created: -1 },
+    projection: { password: 0 },
+  },
+});
+
+// Create single record
+const newUser = await Identity.create({
+  email: 'user@example.com',
+  first_name: 'John',
+  last_name: 'Doe',
+  // _id is auto-generated, never set it manually
+});
+
+// Create with session (for transactions)
+const newUser = await Identity.create({
+  email: 'user@example.com',
+  first_name: 'John',
+  last_name: 'Doe',
+}, { session }); // Pass session as second parameter
+
+// Create multiple records
+const users = await Identity.createMany({
+  entries: [
+    { email: 'user1@example.com', first_name: 'John' },
+    { email: 'user2@example.com', first_name: 'Jane' },
+  ],
+});
+
+// Create multiple with session
+const users = await Identity.createMany({
+  entries: [
+    { email: 'user1@example.com', first_name: 'John' },
+    { email: 'user2@example.com', first_name: 'Jane' },
+  ],
+  options: { session }, // Session goes in options object
+});
+
+// Update one record
+await Identity.updateOne({
+  query: { _id: userId },
+  updateValues: { status: 'inactive' },
+});
+
+// Update with session (for transactions)
+await Identity.updateOne({
+  query: { _id: userId },
+  updateValues: { status: 'inactive' },
+  options: { session }, // Session goes in options object
+});
+
+// Update many records
+await Identity.updateMany({
+  query: { status: 'pending' },
+  updateValues: { status: 'active' },
+});
+
+// Update many with session
+await Identity.updateMany({
+  query: { status: 'pending' },
+  updateValues: { status: 'active' },
+  options: { session }, // Session goes in options object
+});
+
+// Delete one record (soft delete with paranoid: true)
+await Identity.deleteOne({ query: { _id: userId } });
+
+// Delete with session (for transactions)
+await Identity.deleteOne({
+  query: { _id: userId },
+  options: { session }, // Session goes in options object
+});
+
+// Access raw Mongoose model (use sparingly, mainly for aggregations)
+const IdentityModel = Identity.raw('Identity');
+const stats = await IdentityModel.aggregate([...]);
+```
+
+**Session Handling in Repositories**:
+- `create(data, options)` - Session as second parameter: `{ session }`
+- `createMany({ entries, options })` - Session in options: `options: { session }`
+- `updateOne({ query, updateValues, options })` - Session in options
+- `updateMany({ query, updateValues, options })` - Session in options
+- `deleteOne({ query, options })` - Session in options
+
+---
+
+## Endpoints
+
+Endpoints orchestrate the request-response cycle. Keep them thin—delegate to services.
 
 ### Endpoint Structure
 
-**Location:** `endpoints/[feature-group]/[endpoint-name].js`
-
-**Example:** `endpoints/payment-instructions/process.js`
-
-### Endpoint Template
+**Location**: `endpoints/[resource]/[action-name].js`
 
 ```javascript
 const { createHandler } = require('@app-core/server');
-const parseInstruction = require('@app/services/payment-processor/parse-instruction');
+const { validateClient } = require('@app/middlewares');
+const createIdentityService = require('@app/services/identity-management/create-identity');
 
 module.exports = createHandler({
-  // Step 1: Define the route
-  path: '/payment-instructions',
+  path: '/identities',
   method: 'post', // 'get', 'post', 'put', 'patch', 'delete'
-
-  // Step 2: Add middlewares (optional)
-  middlewares: [], // Empty for no middleware
-
-  // Step 3: Define props (optional)
+  middlewares: [validateClient], // Optional
   props: {
-    // Custom properties accessible in middleware/handler
-    // Example: ACL: { requiresAuth: false }
+    // Optional properties accessible in middlewares/handler
+    rateLimit: { max: 5, window: '1m' },
   },
-
-  // Step 4: Define the handler
   async handler(rc, helpers) {
-    // rc = request context
-    // rc.body = POST/PUT/PATCH payload
-    // rc.query = GET query parameters
-    // rc.params = URL path parameters
-    // rc.headers = HTTP headers
-    // rc.meta = Data added by middleware
-
-    // Step 5: Prepare service payload
+    // Prepare payload from request context (rc)
     const payload = {
-      ...rc.body, // For POST/PUT/PATCH
-      // ...rc.query, // For GET
-      // ...rc.params, // For path params like /resource/:id
+      ...rc.body,
+      ip: rc.properties.IP,
+      client_id: rc.meta.client._id,
+      user_agent: rc.properties.userAgent,
     };
 
-    // Step 6: Call your service
-    const response = await parseInstruction(payload);
+    // Call service
+    const responseData = await createIdentityService(payload);
 
-    // Step 7: Return response
+    // Return response
     return {
-      status: helpers.http_statuses.HTTP_200_OK,
-      message: 'Instruction processed successfully', // Optional
-      data: response,
+      status: helpers.http_statuses.HTTP_201_CREATED,
+      message: 'Identity created successfully',
+      data: responseData,
     };
   },
 });
 ```
 
-### HTTP Status Codes
+**Request Context (`rc`) Properties**:
+- `rc.body` - Request body (POST/PUT/PATCH)
+- `rc.query` - Query parameters (GET)
+- `rc.params` - Path parameters (:id)
+- `rc.headers` - Request headers
+- `rc.properties` - Server-injected properties (IP, userAgent, etc.)
+- `rc.meta` - Data added by middlewares (user, client, etc.)
+- `rc.props` - Endpoint props defined in createHandler
 
-Available via `helpers.http_statuses`:
+### Admin Endpoint Pattern
+
+**CRITICAL**: Admin endpoints require specific structure:
 
 ```javascript
-// Success codes
-HTTP_200_OK                    // General success
-HTTP_201_CREATED              // Resource created
-HTTP_204_NO_CONTENT           // Success with no content
+const { createHandler } = require('@app-core/server');
+const { verifySession, verifyAdmin } = require('@app/middlewares');
+const adminService = require('@app/services/admin/admin-service');
 
-// Client error codes
-HTTP_400_BAD_REQUEST          // Validation errors
-HTTP_401_UNAUTHORIZED         // Authentication required
-HTTP_403_FORBIDDEN            // Permission denied
-HTTP_404_NOT_FOUND           // Resource not found
-HTTP_409_CONFLICT            // Duplicate resource
+module.exports = createHandler({
+  method: 'get',
+  path: '/admin-resource',
+  middlewares: [verifySession, verifyAdmin], // BOTH required
+  props: {
+    allowedAuthMethods: { jwt: true, sk: false }, // JWT only
+    acl: {
+      can_view_resource: true, // ACL permission key
+    },
+  },
+  async handler(rc, helpers) {
+    const payload = rc.query; // Use rc.query for GET, rc.body for POST/PATCH
 
-// Server error codes
-HTTP_500_INTERNAL_SERVER_ERROR // General server error
-HTTP_503_SERVICE_UNAVAILABLE   // Service down
+    const responseData = await adminService(payload);
+
+    return {
+      status: helpers.http_statuses.HTTP_200_OK,
+      message: 'Resource fetched successfully', // Always include message
+      data: responseData,
+    };
+  },
+});
 ```
 
-**Usage Example:**
-```javascript
-// Success
-return {
-  status: helpers.http_statuses.HTTP_200_OK,
-  data: result,
-};
+### Endpoint Registration
 
-// Validation error (caught by error handler)
-// Just throw the error, the framework handles the status code
-throwAppError(Messages.INVALID_INPUT, ERROR_CODE.VALIDATIONERR);
-```
+**In `app.js`**:
 
-### Registering Your Endpoint
-
-**Step 1:** Create your endpoint folder structure
-```
-endpoints/
-  payment-instructions/
-    process.js        // Your endpoint file
-```
-
-**Step 2:** Add to `app.js`
 ```javascript
 const ENDPOINT_CONFIGS = [
-  // ... existing configs
-  { path: './endpoints/payment-instructions/' }, // Add your folder
+  { path: './endpoints/identity-management/' },
+  { path: './endpoints/account-management/' },
+  { path: './endpoints/admin/' },
 ];
 ```
 
-The framework will automatically load all `.js` files in the folder.
-
 ---
 
-## Using Middleware (Optional)
+## Middlewares
 
-Middleware runs before your endpoint handler. Use it for cross-cutting concerns like authentication, logging, or validation.
-
-### When to Use Middleware
-
-**Use middleware for:**
-- Authentication/authorization
-- Request logging
-- Rate limiting
-- Payload signature verification
-- Input sanitization
-
-**Don't use middleware for:**
-- Business logic (belongs in services)
-- Data transformations (belongs in services)
-- Database operations (belongs in repositories)
+Middlewares run before endpoint handlers for cross-cutting concerns.
 
 ### Middleware Structure
 
-**Location:** `middlewares/[middleware-name].js`
-
-**Example:** `middlewares/log-request.js`
-
-```javascript
-const { createHandler } = require('@app-core/server');
-const { appLogger } = require('@app-core/logger');
-
-module.exports = createHandler({
-  // Step 1: Define path pattern
-  path: '*', // '*' = all routes, or specific pattern like '/api/*'
-
-  // Step 2: Define handler
-  async handler(rc, helpers) {
-    // rc = request context
-    // rc.props = endpoint props (from endpoint definition)
-
-    // Step 3: Perform middleware logic
-    appLogger.info(
-      {
-        method: rc.method,
-        path: rc.path,
-        body: rc.body,
-      },
-      'request-received'
-    );
-
-    // Step 4: Augment request context (optional)
-    // Data added here becomes available in endpoint handler as rc.meta
-    return {
-      augments: {
-        meta: {
-          requestTime: Date.now(),
-          // Add any data you want available in endpoint handler
-        },
-      },
-    };
-  },
-});
-```
-
-### Using Middleware in Endpoints
-
-```javascript
-const { createHandler } = require('@app-core/server');
-const logRequest = require('@app/middlewares/log-request');
-
-module.exports = createHandler({
-  path: '/payment-instructions',
-  method: 'post',
-  
-  // Add middleware here
-  middlewares: [logRequest],
-  
-  async handler(rc, helpers) {
-    // Access data from middleware via rc.meta
-    console.log('Request time:', rc.meta.requestTime);
-    
-    // Your handler logic...
-  },
-});
-```
-
-### Middleware Example: Simple Validator
+**Location**: `middlewares/[middleware-name].js`
 
 ```javascript
 const { createHandler } = require('@app-core/server');
 const { throwAppError, ERROR_CODE } = require('@app-core/errors');
+const AuthenticationMessages = require('@app/messages/authentication');
+const verifyTokenService = require('@app/services/identity-management/verify-token');
 
 module.exports = createHandler({
-  path: '*',
+  path: '*', // Can use glob patterns or specific paths
   async handler(rc) {
-    // Check if endpoint requires validation
-    if (rc.props?.requiresValidation) {
-      const contentType = rc.headers['content-type'];
-      
-      if (!contentType || !contentType.includes('application/json')) {
-        throwAppError(
-          'Content-Type must be application/json',
-          ERROR_CODE.INVLDREQ
-        );
-      }
+    const token = rc.headers.authorization?.replace('Bearer ', '');
+
+    if (!token) {
+      throwAppError(AuthenticationMessages.MISSING_TOKEN, ERROR_CODE.NOAUTHERR);
     }
 
-    // Pass through without augments
-    return {};
+    const user = await verifyTokenService({ token });
+
+    // Augment request context for subsequent handlers
+    return {
+      augments: {
+        meta: { user }, // Available as rc.meta.user in endpoint
+      },
+    };
   },
 });
 ```
 
-**Register middleware** in `middlewares/index.js`:
+**Export in `middlewares/index.js`**:
+
 ```javascript
+const validateClient = require('./validate-client');
+const verifySession = require('./verify-session');
+const verifyAdmin = require('./verify-admin');
+
 module.exports = {
-  // ... existing middleware
-  logRequest: require('./log-request'),
+  validateClient,
+  verifySession,
+  verifyAdmin,
 };
+```
+
+---
+
+## Specs Folder
+
+The `specs/` folder contains VSL validation specs and endpoint specifications.
+
+### Structure
+
+```
+specs/
+  [servicegroup]/
+    data/
+      [service].go           # VSL data validation specs
+    endpoint/
+      [service].endpoint.go  # Extended VSL endpoint specs
+```
+
+**Note**: `.go` extension is for syntax highlighting, not actual Go code.
+
+### Data Spec Example
+
+`specs/identity-management/data/create-identity.go`:
+
+```javascript
+root { // Identity creation validation
+  email string<trim|lowercase|isEmail>
+  password string<minLength:8|maxLength:128>
+  first_name string<trim|minLength:2|maxLength:35>
+  last_name string<trim|minLength:2|maxLength:35>
+  middle_name? string<trim|minLength:2|maxLength:35>
+  phonenumber? string<minLength:10|maxLength:14>
+}
+```
+
+### Endpoint Spec Example
+
+`specs/identity-management/endpoint/create-identity.endpoint.go`:
+
+```javascript
+CreateIdentityRequest {
+  path /identities
+  method POST
+  body {
+    email string<trim|lowercase|isEmail>
+    password string<minLength:8|maxLength:128>
+    first_name string<trim|minLength:2|maxLength:35>
+    last_name string<trim|minLength:2|maxLength:35>
+  }
+  response.ok {
+    http.code 201
+    status successful
+    message "Identity created successfully"
+    data {
+      identity {
+        id string<length:26>
+        email string
+        first_name string
+        last_name string
+        created number
+      }
+    }
+  }
+  response.error {
+    http.code 400
+    status error
+    message "Validation failed"
+    data {
+      errors[] {
+        field string
+        message string
+        code string
+      }
+    }
+  }
+}
 ```
 
 ---
 
 ## Error Handling
 
-The codebase has a centralized error handling system.
+### Message Files
 
-### Available Error Codes
-
-From `@app-core/errors`:
+**Location**: `messages/[resource].js`
 
 ```javascript
-const { ERROR_CODE } = require('@app-core/errors');
+module.exports = {
+  USER_NOT_FOUND: 'User with the provided credentials not found',
+  EMAIL_ALREADY_EXISTS: 'An account with this email already exists',
+  INVALID_PASSWORD: 'Password must be at least 8 characters',
+  ACCOUNT_INACTIVE: 'Your account has been deactivated',
+};
+```
 
-// Authentication & Authorization
-ERROR_CODE.AUTHERR           // Authentication error
-ERROR_CODE.NOAUTHERR         // No authentication provided
-ERROR_CODE.INVLDAUTHTOKEN    // Invalid auth token
-ERROR_CODE.INACTIVEACCT      // Inactive account
-ERROR_CODE.EXPIREDTOKEN      // Expired token
-ERROR_CODE.PERMERR           // Permission error
+**Export in `messages/index.js`**:
 
-// Request Errors
-ERROR_CODE.INVLDREQ          // Invalid request
-ERROR_CODE.INVLDDATA         // Invalid data
-ERROR_CODE.VALIDATIONERR     // Validation error
-ERROR_CODE.NOTFOUND          // Not found
+```javascript
+const IdentityManagementMessages = require('./identity-management');
+const AuthenticationMessages = require('./authentication');
 
-// Business Errors
-ERROR_CODE.DUPLRCRD          // Duplicate record
-ERROR_CODE.LIMITERR          // Rate limit error
-ERROR_CODE.FEEERR            // Fee error
-
-// System Errors
-ERROR_CODE.APPERR            // Application error
-ERROR_CODE.HTTPREQERR        // HTTP request error
+module.exports = {
+  IdentityManagementMessages,
+  AuthenticationMessages,
+};
 ```
 
 ### Throwing Errors
 
-**Always use `throwAppError`:**
-
 ```javascript
 const { throwAppError, ERROR_CODE } = require('@app-core/errors');
-const PaymentMessages = require('@app/messages/payment');
+const { IdentityManagementMessages } = require('@app/messages');
 
-// Throw an error
-if (!account) {
-  throwAppError(PaymentMessages.ACCOUNT_NOT_FOUND, ERROR_CODE.NOTFOUND);
-}
-
-// The framework automatically converts this to appropriate HTTP response
-```
-
-### Error Response Format
-
-The framework automatically formats errors:
-
-```json
-{
-  "status": "error",
-  "message": "Account not found",
-  "code": "NOTFOUND"
-}
+// Always throw with message from messages file + error code
+throwAppError(IdentityManagementMessages.USER_NOT_FOUND, ERROR_CODE.NOTFOUND);
 ```
 
 ---
 
-## Testing Your Implementation
+## Logging
 
-### Local Testing
-
-**1. Start your server:**
-```bash
-npm run dev
-```
-
-> 💡 **For complete setup instructions, see the [Getting Started](./documentation.md#getting-started) section in documentation.md**
-
-**2. Test with curl:**
-```bash
-curl -X POST http://localhost:3000/payment-instructions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "accounts": [
-      {"id": "a", "balance": 230, "currency": "USD"},
-      {"id": "b", "balance": 300, "currency": "USD"}
-    ],
-    "instruction": "DEBIT 30 USD FROM ACCOUNT a FOR CREDIT TO ACCOUNT b"
-  }'
-```
-
-**3. Test with Postman or Thunder Client (VS Code extension)**
-
-### Logging
-
-Use the built-in logger (never use `console.log`):
+### Application Logging
 
 ```javascript
 const { appLogger } = require('@app-core/logger');
 
-// Info logging
-appLogger.info({ data: 'some data' }, 'log-key');
+// Info logs
+appLogger.info({ userId, action: 'login' }, 'user-login-success');
 
-// Warning
-appLogger.warn({ issue: 'something' }, 'warning-key');
+// Warning logs
+appLogger.warn({ userId, attempts: 3 }, 'user-login-attempts-warning');
 
-// Error
-appLogger.error({ error: err }, 'error-key');
+// Error logs
+appLogger.error({ error, userId }, 'user-login-error');
 
-// Critical error (special formatting)
-appLogger.errorX({ error: err }, 'critical-error-key');
+// Critical error logs (special formatting)
+appLogger.errorX({ error, context: 'payment-processing' }, 'critical-payment-error');
 ```
 
-### Debugging Tips
+### Performance Logging
 
-**1. Log your parsing steps:**
 ```javascript
-appLogger.info({ instruction: instruction }, 'parsing-start');
-appLogger.info({ parsed: parsedData }, 'parsing-complete');
-```
+const { TimeLogger } = require('@app-core/logger');
 
-**2. Validate incrementally:**
-```javascript
-// Check one thing at a time
-if (!isValidAmount) {
-  appLogger.warn({ amount }, 'invalid-amount');
-  throwAppError(Messages.INVALID_AMOUNT, ERROR_CODE.INVLDDATA);
-}
-```
+const timeLogger = new TimeLogger('create-identity-service');
 
-**3. Test edge cases:**
-- Empty strings
-- Extra whitespace
-- Case variations
-- Missing keywords
-- Invalid formats
+timeLogger.start('validate-input');
+// ... validation code
+timeLogger.end('validate-input');
+
+timeLogger.start('database-query');
+// ... database operations
+timeLogger.end('database-query');
+
+// Automatically logs: "create-identity-service.validate-input: 12ms"
+```
 
 ---
 
-## Common Pitfalls
+## Code Quality Rules
 
-### 1. Validator Spec Formatting
+### Strict Requirements
 
-❌ **Wrong:**
+1. ✅ **Single Exit Point**: Functions must have exactly one `return` statement
+2. ✅ **No console.log**: Always use `appLogger`
+3. ✅ **Object Parameters**: Services accept one object, not multiple parameters
+4. ✅ **Validation First**: Validate input before any business logic
+5. ✅ **Pure Functions**: Services should be predictable and side-effect free where possible
+6. ✅ **DRY Principle**: Don't repeat yourself—extract common logic
+7. ✅ **Error Messages from Files**: Never hardcode error messages
+8. ✅ **Single File Responsibility**: One exported function per file
+9. ✅ **No System Commands**: Never execute bash/git commands unless explicitly requested
+10. ✅ **No Package Management**: Never run npm/yarn unless explicitly requested
+
+### Service Composition
+
+Services should handle their complete business domain. If an operation naturally triggers related operations (e.g., profile creation → contact creation), implement these cascades within the responsible service, not in calling services.
+
+**Example**:
+
 ```javascript
-const spec = `root{ // No space before brace
-  name string
-}`;
-```
-
-✅ **Correct:**
-```javascript
-const spec = `root { // Space before brace
-  name string
-}`;
-```
-
-### 2. Service Function Signature
-
-❌ **Wrong:**
-```javascript
-async function myService(param1, param2, param3) {
-  // Multiple individual parameters
-}
-```
-
-✅ **Correct:**
-```javascript
-async function myService(serviceData, options = {}) {
-  // Single object parameter + optional options
-}
-```
-
-### 3. Multiple Return Statements
-
-❌ **Wrong:**
-```javascript
-async function myService(serviceData, options = {}) {
-  if (condition) {
-    return result1;
-  }
-  return result2; // Multiple returns
-}
-```
-
-✅ **Correct:**
-```javascript
-async function myService(serviceData, options = {}) {
-  let response;
-  
-  if (condition) {
-    response = result1;
-  } else {
-    response = result2;
-  }
-  
-  return response; // Single return
-}
-```
-
-### 4. Error Handling
-
-❌ **Wrong:**
-```javascript
-throw new Error('Account not found'); // Plain Error
-```
-
-✅ **Correct:**
-```javascript
-const { throwAppError, ERROR_CODE } = require('@app-core/errors');
-const Messages = require('@app/messages/payment');
-
-throwAppError(Messages.ACCOUNT_NOT_FOUND, ERROR_CODE.NOTFOUND);
-```
-
-### 5. Logging
-
-❌ **Wrong:**
-```javascript
-console.log('Processing payment'); // Don't use console.log
-```
-
-✅ **Correct:**
-```javascript
-const { appLogger } = require('@app-core/logger');
-appLogger.info({ action: 'processing' }, 'payment-processing');
-```
-
-### 6. Validation Before Logic
-
-❌ **Wrong:**
-```javascript
-async function myService(serviceData, options = {}) {
-  // Business logic first
-  const result = processData(serviceData);
-  
-  // Validation later
+// ✅ GOOD: Cascade handled in service
+async function createProfile(serviceData, options = {}) {
   const data = validator.validate(serviceData, parsedSpec);
+  let result;
+
+  try {
+    const profile = await Profile.create(data);
+    
+    // Service handles related operations
+    if (data.contacts) {
+      await createContacts({ profile_id: profile._id, contacts: data.contacts });
+    }
+
+    result = profile;
+  } catch (error) {
+    appLogger.errorX(error, 'create-profile-error');
+    throw error;
+  }
+
+  return result;
 }
+
+// ❌ BAD: Cascade handled in calling code (endpoint/other service)
+// This violates single responsibility and creates duplication
 ```
 
-✅ **Correct:**
-```javascript
-async function myService(serviceData, options = {}) {
-  // Validation FIRST
-  const data = validator.validate(serviceData, parsedSpec);
-  
-  // Then business logic
-  const result = processData(data);
-}
-```
+---
 
-### 7. Path Aliases
+## Best Practices
 
-❌ **Wrong:**
-```javascript
-const validator = require('../../core/validator');
-const logger = require('../../../core/logger');
-```
+### Think Top-Down
 
-✅ **Correct:**
-```javascript
-const validator = require('@app-core/validator');
-const { appLogger } = require('@app-core/logger');
-```
+1. **Current Needs**: What does this feature need now?
+2. **Future Requirements**: What might change?
+3. **Breaking Points**: Where could this fail?
+
+### Architecture Principles
+
+- ✅ Keep business logic in **services**, not endpoints
+- ✅ Use **middleware** for cross-cutting concerns (auth, validation, logging)
+- ✅ Use **repository pattern** for all database operations
+- ✅ Consistent **error handling** and **logging** throughout
+- ✅ Follow **established patterns** for imports and module structure
+
+### Code Organization
+
+- ✅ One function per file
+- ✅ Single responsibility per file
+- ✅ Group related services by feature (e.g., `services/identity-management/`)
+- ✅ Utility functions in `services/utils/`
+
+### Validation Best Practices
+
+- ✅ Always include space between `root` and `{` in specs: `root { ... }`
+- ✅ Parse specs once at module level, reuse in function
+- ✅ Validate at service entry point, not in endpoints
+- ✅ Use constraint order: transforms → length → format → enums
+
+### Transaction Best Practices
+
+- ✅ Use transactions for multi-table operations
+- ✅ Pass sessions through service calls via `options.session`
+- ✅ Only session creator manages lifecycle (start/commit/abort/end)
+- ❌ Don't use transactions for logging or audit trails
+
+### Security Best Practices
+
+- ✅ Hash all passwords with bcrypt
+- ✅ Use ULID for all record IDs
+- ✅ Validate and sanitize all inputs
+- ✅ Never expose internal error details to clients
+- ✅ Use environment variables for secrets
 
 ---
 
 ## Quick Reference
 
-### File Structure for Assessment
+### Project Structure
 
 ```
-services/
-  payment-processor/
-    parse-instruction.js       # Your parsing service
-
-endpoints/
-  payment-instructions/
-    process.js                 # Your API endpoint
-
-messages/
-  payment.js                   # Your error messages
+├── app.js                    # Entry point
+├── bootstrap.js              # App initialization
+├── core/                     # @app-core modules
+│   ├── errors/
+│   ├── jwt/
+│   ├── logger/
+│   ├── mongoose/
+│   ├── security/
+│   ├── validator/
+│   └── ...
+├── endpoints/                # API routes
+│   ├── identity-management/
+│   ├── account-management/
+│   └── admin/
+├── services/                 # Business logic
+│   ├── identity-management/
+│   ├── account-management/
+│   └── utils/
+├── models/                   # Mongoose schemas
+├── repository/               # Data access layer
+├── middlewares/              # Request interceptors
+├── messages/                 # Error messages
+├── specs/                    # Validation specs
+│   └── [servicegroup]/
+│       ├── data/
+│       └── endpoint/
+└── docs/                     # Documentation
 ```
 
-### Minimal Service Template
+### Common Imports
 
 ```javascript
+// Validation
 const validator = require('@app-core/validator');
+
+// Error handling
 const { throwAppError, ERROR_CODE } = require('@app-core/errors');
-const Messages = require('@app/messages/payment');
+const { IdentityManagementMessages } = require('@app/messages');
 
-const spec = `root {
-  // Your spec here
-}`;
+// Security
+const { hash } = require('@app-core/security');
 
-const parsedSpec = validator.parse(spec);
+// Logging
+const { appLogger, TimeLogger } = require('@app-core/logger');
 
-async function myService(serviceData, options = {}) {
-  let response;
-  const data = validator.validate(serviceData, parsedSpec);
-  
-  // Your logic here
-  
-  return response;
-}
+// IDs
+const { ulid } = require('@app-core/randomness');
 
-module.exports = myService;
-```
+// Database
+const Identity = require('@app/repository/identity-management/identity');
+const { createSession } = require('@app-core/mongoose');
 
-### Minimal Endpoint Template
-
-```javascript
+// Server
 const { createHandler } = require('@app-core/server');
-const myService = require('@app/services/my-group/my-service');
-
-module.exports = createHandler({
-  path: '/my-path',
-  method: 'post',
-  middlewares: [],
-  async handler(rc, helpers) {
-    const payload = rc.body;
-    const response = await myService(payload);
-    
-    return {
-      status: helpers.http_statuses.HTTP_200_OK,
-      data: response,
-    };
-  },
-});
 ```
 
 ---
 
-## Additional Resources
+## Getting Started
 
-### Documentation
+### Prerequisites
 
-- **[documentation.md](./documentation.md)** - Complete architecture guide covering:
-  - All core modules and their usage
-  - Comprehensive validator syntax reference
-  - Repository patterns and methods
-  - Transaction handling
-  - Model definitions and constraints
-  - Complete endpoint examples
-  - Best practices and code quality rules
+- **Node.js** v16+ and npm installed
+- **MongoDB** instance running (local or remote)
+- **Environment variables** configured
 
-### Core Utilities
+### Installation & Setup
 
-```javascript
-// Logger
-const { appLogger } = require('@app-core/logger');
-appLogger.info(data, 'log-key');
-appLogger.error(data, 'error-key');
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd <project-directory>
+   ```
 
-// Errors
-const { throwAppError, ERROR_CODE } = require('@app-core/errors');
-throwAppError(message, ERROR_CODE.INVLDDATA);
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
 
-// Validator
-const validator = require('@app-core/validator');
-const spec = validator.parse(specString);
-const data = validator.validate(inputData, spec);
+3. **Set up environment variables**:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env` and configure required variables:
+   ```bash
+   # Server Configuration
+   PORT=3000
+   APP_BASE_URL=http://localhost:3000
+   APP_NAME=YourAppName
 
-// Randomness (if needed)
-const { ulid, uuid, randomNumbers } = require('@app-core/randomness');
-const id = ulid(); // Generate unique ID
+   # Database
+   MONGODB_URI=mongodb://localhost:27017/your_database
 
-// Security (if needed)
-const { hash, redact } = require('@app-core/security');
-const hashed = await hash.create('password', 'bcrypt');
+   # JWT Authentication
+   JWT_SECRET=your-secret-key-here
+   JWT_DEFAULT_EXPIRY=3600
+
+   # Security
+   HASH_SALT_ROUNDS=10
+
+   # Email (if using email features)
+   RESEND_TOKEN=your-resend-api-key
+   RESEND_SENDER_ADDRESS=noreply@yourdomain.com
+
+   # Add other required environment variables...
+   ```
+
+4. **Start the development server**:
+   ```bash
+   node bootstrap.js
+   ```
+   
+   The server will start on the port specified in your `.env` file (default: 3000).
+
+### Development Commands
+
+```bash
+# Start development server
+node bootstrap.js
+
+# Run tests
+npm test
+
+# Sync environment files
+npm run sync-envs
 ```
 
-### String Manipulation (No Regex Allowed)
+### Verify Installation
 
-For the assessment, you can only use basic string methods:
+Once the server is running, you should see:
+```
+Server listening on port 3000
+MongoDB connected successfully
+```
 
-```javascript
-// Allowed
-.split(' ')           // Split by string
-.indexOf('keyword')   // Find position
-.substring(start, end) // Extract substring
-.slice(start, end)    // Extract substring
-.trim()               // Remove whitespace
-.toLowerCase()        // Convert to lowercase
-.toUpperCase()        // Convert to uppercase
-.replace('old', 'new') // Replace string with string
-.startsWith('prefix')
-.endsWith('suffix')
-.includes('substring')
-
-// NOT allowed (uses regex)
-.match(/pattern/)
-.split(/pattern/)
-.replace(/pattern/, 'replacement')
-.test()
+Test the server by accessing the application:
+```bash
+curl http://localhost:3000
 ```
 
 ---
 
-## Final Tips
+## Need Help?
 
-1. **Read the [documentation.md](./documentation.md)** - Complete architecture documentation and conventions
-2. **Follow the single responsibility principle** - One service = one purpose
-3. **Validate early** - Catch errors as soon as possible
-4. **Log important steps** - Makes debugging easier
-5. **Test incrementally** - Don't write everything at once
-6. **Use the correct error codes** - Map validation failures to appropriate codes
-7. **Keep services pure** - No side effects, predictable outputs
-8. **Use path aliases** - Makes imports cleaner and easier to maintain
+- Check existing services in `services/` for patterns
+- Review specs in `specs/` for validation examples
+- Read endpoint implementations in `endpoints/`
 
 ---
 
-**Good luck with your assessment!** 🚀
-
-Remember: This guide shows you HOW to structure your code, not WHAT logic to implement. The problem-solving is up to you!
+**Version**: 2.0  
+**Last Updated**: November 2025
